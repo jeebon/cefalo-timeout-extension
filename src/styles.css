@@ -34,7 +34,7 @@
 .cto-panel-status {
   font-size: 12px;
   font-weight: 600;
-  color: #6b7280;
+  color: #3c4e3a;
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
@@ -48,7 +48,7 @@
 }
 
 .cto-panel-countdown {
-  font-size: 34px;
+  font-size: 28px;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
@@ -57,7 +57,7 @@
 
 .cto-panel-label {
   font-size: 13px;
-  color: #6b7280;
+  color: #3c4e3a;
   min-height: 1.4em;
 }
 
@@ -72,7 +72,7 @@
 
 .cto-panel-bar-fill {
   height: 100%;
-  background: #2f6b45;
+  background: #3c4e3a;
   transition: width 1s linear;
 }
 
@@ -91,19 +91,12 @@
   font-size: 24px;
 }
 
-.cto-panel[data-cto-state="overtime"] .cto-panel-countdown,
-.cto-panel[data-cto-state="overtime"] .cto-panel-bar-fill {
+.cto-panel[data-cto-state="timeup"] .cto-panel-countdown,
+.cto-panel[data-cto-state="timeup"] .cto-panel-bar-fill {
   color: #2f6b45;
 }
-.cto-panel[data-cto-state="overtime"] .cto-panel-bar-fill {
+.cto-panel[data-cto-state="timeup"] .cto-panel-bar-fill {
   background: #2f6b45;
-}
-
-.cto-panel[data-cto-state="done"] .cto-panel-countdown {
-  display: none;
-}
-.cto-panel[data-cto-state="done"] .cto-panel-bar-fill {
-  background: #9ca3af;
 }
 
 .cto-panel[data-cto-state="loading"] .cto-panel-countdown {
@@ -149,7 +142,7 @@
 }
 .cto-dir-head-summary {
   flex: 1;
-  color: #6b7280;
+  color: #3c4e3a;
   font-size: 12px;
   font-weight: 400;
   overflow: hidden;
@@ -193,16 +186,26 @@
   gap: 6px;
   align-items: flex-start;
 }
+.cto-dir-track-buttons {
+  display: flex;
+  gap: 8px;
+}
 .cto-dir-hint {
   margin: 0;
-  color: #6b7280;
+  color: #3c4e3a;
   font-size: 12px;
 }
 
-.cto-dir-former {
+/* "Member changes" — the FULL history, one group per snapshot ever taken
+   (see roster.js#buildChangeGroups), replacing both the earlier
+   Former-members-only strip AND the separate raw "Timeline" list that used
+   to sit below it. No separate collapsed thumbnail row, since a thumbnail
+   alone doesn't distinguish three event types — the header (with a running
+   count) is the only collapsed view. */
+.cto-dir-changes {
   margin-bottom: 10px;
 }
-.cto-dir-former-header {
+.cto-dir-changes-header {
   background: none;
   border: none;
   padding: 0;
@@ -210,12 +213,6 @@
   font-size: 13px;
   cursor: pointer;
   color: inherit;
-}
-.cto-dir-former-thumbs {
-  display: flex;
-  gap: 4px;
-  margin-top: 6px;
-  flex-wrap: wrap;
 }
 .cto-dir-thumb {
   width: 26px;
@@ -230,30 +227,102 @@
   justify-content: center;
   font-size: 10px;
   font-weight: 600;
-  color: #6b7280;
+  color: #3c4e3a;
 }
-.cto-dir-former-list {
+.cto-dir-changes-list {
   margin-top: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  max-height: 500px;
+  overflow-y: auto;
 }
-.cto-dir-former-row {
+/* One snapshot's group: a header line (same "when + what happened" text
+   the old standalone Timeline row showed) plus that snapshot's own rows
+   nested directly under it — a light top border separates one snapshot
+   from the next so a long history stays scannable. */
+.cto-dir-change-group {
+  padding: 8px 0;
+  border-top: 1px solid rgb(229, 231, 235);
+}
+.cto-dir-change-group:first-child {
+  padding-top: 0;
+  border-top: none;
+}
+.cto-dir-change-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #3c4e3a;
+}
+.cto-dir-change-group-when {
+  font-weight: 600;
+  flex: none;
+}
+.cto-dir-change-group-summary {
+  flex: 1;
+}
+.cto-dir-change-group-del {
+  flex: none;
+  border: none;
+  background: none;
+  color: #9ca3af;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 4px;
+  line-height: 1;
+}
+.cto-dir-change-group-del:hover {
+  color: #a3342b;
+}
+/* Indented one level under the group header — the visual nesting is what
+   makes "this person changed as part of THIS snapshot" traceable at a
+   glance, instead of every row looking equally top-level. */
+.cto-dir-change-row {
   display: flex;
   gap: 8px;
   align-items: flex-start;
+  margin-top: 8px;
+  padding-left: 12px;
 }
-.cto-dir-former-row .cto-dir-thumb {
+.cto-dir-change-row .cto-dir-thumb {
   width: 32px;
   height: 32px;
 }
-.cto-dir-former-name {
+.cto-dir-change-info {
+  flex: 1;
+  min-width: 0;
+}
+.cto-dir-change-name {
   font-weight: 600;
 }
-.cto-dir-former-meta,
-.cto-dir-former-left {
-  color: #6b7280;
+.cto-dir-change-meta {
+  color: #3c4e3a;
   font-size: 12px;
+}
+/* The label sits INLINE right after the name (see directory.js#changeRow)
+   instead of pushed to the row's far right — only the label text itself is
+   colored, never the row/name/meta, keeping this consistent with the
+   bar's existing colored-TEXT-not-background language
+   (.cto-dir-error/.cto-dir-btn-danger). */
+.cto-dir-change-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+.cto-dir-change-label--added {
+  color: #15803d;
+}
+.cto-dir-change-label--removed {
+  color: #a3342b;
+}
+/* Team and position changes share this color — both are "modified in
+   place", distinct from the added/removed (join/leave) pair above. */
+.cto-dir-change-label--team-changed,
+.cto-dir-change-label--designation-changed {
+  color: #b45309;
+}
+.cto-dir-changes-more {
+  color: #9ca3af;
+  font-size: 11px;
+  margin-top: 8px;
 }
 
 .cto-dir-action-row {
@@ -288,58 +357,8 @@
    `[class][hidden]` outranks a bare class selector, which is what makes
    this override win regardless of rule order. */
 .cto-dir-track-row[hidden],
-.cto-dir-former-list[hidden],
+.cto-dir-changes-list[hidden],
 .cto-dir-action-row[hidden],
 .cto-dir-confirm[hidden] {
   display: none;
-}
-
-.cto-dir-timeline {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  max-height: 180px;
-  overflow-y: auto;
-}
-.cto-dir-timeline-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: #6b7280;
-}
-.cto-dir-timeline-summary {
-  flex: 1;
-}
-.cto-dir-timeline-del {
-  flex: none;
-  border: none;
-  background: none;
-  color: #9ca3af;
-  cursor: pointer;
-  font-size: 11px;
-  padding: 2px 4px;
-  line-height: 1;
-}
-.cto-dir-timeline-del:hover {
-  color: #a3342b;
-}
-
-/* Badge on a member card — needs the card to be a positioning context;
-   .cto-dir-badge-anchor is only added when the card's own position is
-   `static`, so this never overrides a layout the portal already controls. */
-.cto-dir-badge-anchor {
-  position: relative;
-}
-.cto-dir-badge {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  background: #2f6b45;
-  color: #fff;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  padding: 2px 5px;
-  border-radius: 4px;
 }

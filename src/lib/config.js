@@ -34,7 +34,6 @@ export const HEADER_TEXT = {
   date: "date",
   startTime: "start time",
   endTime: "end time",
-  totalWorkHour: "total work hour",
   status: "status",
 };
 
@@ -71,11 +70,6 @@ export const DIR_BUILDS_ATTR = "data-cto-dir-builds";
 // (which counts DOM rebuilds, not writes) — this is what proves in production
 // that a click actually reached storage, readable from the Elements panel.
 export const DIR_SNAPS_ATTR = "data-cto-dir-snaps";
-// Badges are marked SEPARATELY from the bar itself (DIR_ATTR): a sweep that
-// removes every DIR_ATTR node that isn't the bar would delete every badge on
-// each sync, because the bar has exactly one marked node and the directory
-// grid can have hundreds.
-export const DIR_BADGE_ATTR = "data-cto-dir-badge";
 
 export const STORAGE_KEY = "cto-members-v1";
 export const STORAGE_VERSION = 1;

@@ -1,6 +1,6 @@
 {
   "name": "cefalo-timeout",
-  "version": "2.3.0",
+  "version": "2.5.0",
   "private": true,
   "description": "Adds a computed Secure End Time column and a live Today countdown panel to the Cefalo HR portal attendance report.",
   "type": "module",

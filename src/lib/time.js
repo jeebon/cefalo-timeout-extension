@@ -30,6 +30,21 @@ export function formatHm(t) {
 }
 
 /**
+ * 12-hour AM/PM formatting, used ONLY by the Today panel (derivePanelState)
+ * — the table column stays 24h via formatHm above, deliberately different
+ * formats for the two surfaces. `h % 12 || 12` (not bare `h % 12`) is
+ * required: a Secure End Time can itself land exactly on {h:0,m:0} (e.g. a
+ * 15:30 start + 8h30), not just an odd minute past midnight, and a bare
+ * `% 12` would print "0:00 AM" instead of "12:00 AM".
+ * @param {{h:number,m:number}} t
+ */
+export function formatHm12(t) {
+  const period = t.h < 12 ? "AM" : "PM";
+  const hour12 = t.h % 12 || 12;
+  return `${hour12}:${pad2(t.m)} ${period}`;
+}
+
+/**
  * Add a duration (in minutes) to a 24h time, wrapping across midnight.
  * The portal renders 24-hour times, so this replaces the old `hours %= 12`
  * + hardcoded " PM" logic, which was wrong the moment a start time was in
@@ -119,6 +134,35 @@ function dateTimeAt(dateKey, hm) {
 }
 
 /**
+ * Whether a previous day's row should still be treated as an overnight
+ * shift in progress, rather than a stale completed day sitting around while
+ * waiting for today's own row to appear (see attendance.js's
+ * captureTodayRowSnapshot). Deliberately does NOT read End Time — that
+ * field is rewritten on every ID-card punch, not just a final checkout, so
+ * "End Time is non-empty" was never real evidence the shift had ended (that
+ * was the source of the original bug this replaces). Instead this bounds
+ * relevance purely from Start Time + duration: still active until one full
+ * shift-duration past its own Secure End Time. That's generous enough to
+ * cover a real overnight shift sitting in `timeup` for a while after
+ * crossing over, while still expiring well before "yesterday" would
+ * otherwise match every single ordinary completed day, every morning, for
+ * the many hours before today's own row exists.
+ * @param {string} startText
+ * @param {string} rowDateKey "YYYY-MM-DD" — the row's own date, e.g. yesterday's
+ * @param {Date} now
+ * @param {number} durationMinutes
+ */
+export function isOvernightRowStillRelevant(startText, rowDateKey, now, durationMinutes) {
+  const start = parseHm(startText);
+  if (!start) return false;
+  const end = addMinutes(start, durationMinutes);
+  const endDate = dateTimeAt(rowDateKey, end);
+  if (end.crossesMidnight) endDate.setDate(endDate.getDate() + 1);
+  const cutoff = new Date(endDate.getTime() + durationMinutes * 60_000);
+  return now.getTime() < cutoff.getTime();
+}
+
+/**
  * Format a non-negative millisecond duration as zero-padded "HH:MM:SS".
  * @param {number} ms
  */
@@ -128,6 +172,20 @@ export function formatCountdown(ms) {
   const m = Math.floor((totalSeconds % 3600) / 60);
   const s = totalSeconds % 60;
   return `${pad2(h)}:${pad2(m)}:${pad2(s)}`;
+}
+
+/**
+ * Format a non-negative millisecond duration as "Xh Ym Zs" — used for the
+ * panel's "Time Spent" figure, where a human-readable duration reads better
+ * than the zero-padded "HH:MM:SS" the countdown itself uses.
+ * @param {number} ms
+ */
+export function formatDurationLong(ms) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  return `${h}h ${m}m ${s}s`;
 }
 
 /**
@@ -142,10 +200,16 @@ export function progressRatio(elapsedMs, totalMs) {
 }
 
 /**
- * Pure state for the "Today" countdown panel. Never claims a figure that
- * contradicts the portal: running/overtime report presence ("in office"
- * time), not the portal's own counted total, and done echoes the portal's
- * own Total Work Hour text verbatim instead of recomputing a rival number.
+ * Pure state for the "Today" countdown panel. This panel answers ONE
+ * question — how long until Secure End Time (Start + durationMinutes) — and
+ * deliberately ignores the portal's own End Time field entirely: End Time is
+ * rewritten on every ID-card punch (100+/day across the building), not just
+ * a final checkout, so it is a punch log, not a "the day is over" flag.
+ * There is no reliable signal for "the person has actually left" available
+ * here, so this function doesn't try to detect one, and neither `running`
+ * nor `timeup` claims the person is still physically present — `inOffice`
+ * is labelled "Time Spent" by panel.js, reporting elapsed-since-clock-in
+ * rather than an unbounded "in office" presence claim.
  *
  * `rowDateKey` — the date the matched row itself belongs to, not `now`'s
  * date — is what lets this tell an overnight shift ("start 20:59 yesterday,
@@ -157,23 +221,12 @@ export function progressRatio(elapsedMs, totalMs) {
  *   hasRow: boolean,
  *   rowDateKey: string|null,
  *   startText: string,
- *   endText: string,
- *   portalTotalText?: string,
  *   statusText?: string,
  *   now: Date,
  *   durationMinutes: number,
  * }} args
  */
-export function derivePanelState({
-  hasRow,
-  rowDateKey,
-  startText,
-  endText,
-  portalTotalText,
-  statusText,
-  now,
-  durationMinutes,
-}) {
+export function derivePanelState({ hasRow, rowDateKey, startText, statusText, now, durationMinutes }) {
   const status = statusText || "";
   if (!hasRow || !rowDateKey) return { kind: "loading" };
 
@@ -186,41 +239,28 @@ export function derivePanelState({
 
   const startDate = dateTimeAt(rowDateKey, start);
   const elapsedMs = Math.max(0, now.getTime() - startDate.getTime());
-  const inOffice = formatCountdown(elapsedMs);
-
-  // A real (non-00:00) End Time means the portal already has the final
-  // word — quote its own checkout time and total rather than showing the
-  // *target* secure end time next to them (that's `end` above, used by
-  // running/overtime — reusing it here would print "Out 18:29" beside a
-  // portal card that says the actual checkout was 14:03).
-  const actualEnd = parseHm(endText);
-  if (actualEnd) {
-    return {
-      kind: "done",
-      statusText: status,
-      start: formatHm(start),
-      end: formatHm(actualEnd),
-      portalTotal: portalTotalText || "",
-    };
-  }
+  const inOffice = formatDurationLong(elapsedMs);
 
   const remainingMs = endDate.getTime() - now.getTime();
   if (remainingMs <= 0) {
+    // Frozen, not a growing overtime counter: once Secure End Time is
+    // reached the countdown stops at 00:00:00 and stays there — the
+    // "time's up, you're clear to go" alarm — rather than counting how far
+    // past it you've gone.
     return {
-      kind: "overtime",
+      kind: "timeup",
       statusText: status,
-      start: formatHm(start),
-      end: formatHm(end),
+      start: formatHm12(start),
+      end: formatHm12(end),
       inOffice,
-      over: formatCountdown(-remainingMs),
     };
   }
 
   return {
     kind: "running",
     statusText: status,
-    start: formatHm(start),
-    end: formatHm(end),
+    start: formatHm12(start),
+    end: formatHm12(end),
     inOffice,
     remaining: formatCountdown(remainingMs),
     ratio: progressRatio(elapsedMs, durationMinutes * 60_000),

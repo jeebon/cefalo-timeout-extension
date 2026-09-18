@@ -26,27 +26,61 @@ export function emptyStore() {
  */
 
 /**
- * Compute the added/removed ids for one scrape against the current store,
- * WITHOUT mutating anything. `added` includes both brand-new people and
- * rejoiners (`present === false` in the stored record) — a rejoin is not
- * distinguishable from a join by this function, by design: both are things
- * that just started being true again, and both belong in `added`.
+ * Order-insensitive team-list equality. Team order in the DOM reflects the
+ * portal's own rendering, not something a person did — comparing sorted
+ * copies is what keeps a harmless reorder from being reported as a change.
+ * @param {string[]} a
+ * @param {string[]} b
+ */
+function sameTeams(a, b) {
+  if (a.length !== b.length) return false;
+  const sa = [...a].sort();
+  const sb = [...b].sort();
+  return sa.every((t, i) => t === sb[i]);
+}
+
+/**
+ * Compute the added/removed/teamChanges/designationChanges for one scrape
+ * against the current store, WITHOUT mutating anything.
+ *
+ * `added` includes both brand-new people and rejoiners (`present === false`
+ * in the stored record) — a rejoin is not distinguishable from a join by
+ * this function, by design: both are things that just started being true
+ * again, and both belong in `added`.
+ *
+ * `teamChanges`/`designationChanges` are checked only for people who are
+ * NOT in `added` — a rejoin's team/title is a fresh fact, not a "change"
+ * from the nothing that preceded it while they were away, so those buckets
+ * are mutually exclusive with `added` by construction. The two are
+ * independent of EACH OTHER, though — a promotion that also moves someone
+ * to a new team in the same snap produces one entry in each bucket, not a
+ * single combined one; simpler to reason about and to test than trying to
+ * merge two unrelated kinds of change into one record.
  * @param {ReturnType<typeof emptyStore>} store
  * @param {ScrapedPerson[]} scraped
- * @returns {{added: number[], removed: number[]}}
+ * @returns {{added: number[], removed: number[], teamChanges: {id: number, from: string[], to: string[]}[], designationChanges: {id: number, from: string, to: string}[]}}
  */
 export function diffRoster(store, scraped) {
   const scrapedIds = new Set(scraped.map((p) => p.userId));
   const added = [];
+  const teamChanges = [];
+  const designationChanges = [];
   for (const p of scraped) {
     const existing = store.people[personKey(p.userId)];
-    if (!existing || existing.present === false) added.push(p.userId);
+    if (!existing || existing.present === false) {
+      added.push(p.userId);
+      continue;
+    }
+    if (!sameTeams(existing.teams, p.teams)) teamChanges.push({ id: p.userId, from: existing.teams, to: p.teams });
+    if (existing.designation !== p.designation) {
+      designationChanges.push({ id: p.userId, from: existing.designation, to: p.designation });
+    }
   }
   const removed = [];
   for (const [key, person] of Object.entries(store.people)) {
     if (person.present === true && !scrapedIds.has(Number(key))) removed.push(Number(key));
   }
-  return { added, removed };
+  return { added, removed, teamChanges, designationChanges };
 }
 
 /**
@@ -56,9 +90,18 @@ export function diffRoster(store, scraped) {
  * transforms over in-place writes.
  *
  * `kind` is `"baseline"` for the very first snap (Track) and `"snap"` for
- * every one after. A baseline's `added` is forced to `[]` — it is a starting
- * point, not 257 simultaneous arrivals — even though `diffRoster` would
- * otherwise report every scraped person as added against an empty store.
+ * every one after. A baseline's `added` (and, for the same reason,
+ * `teamChanges`/`designationChanges`) is forced to `[]` — it is a starting
+ * point, not 257 simultaneous arrivals or changes — even though
+ * `diffRoster` would otherwise report every scraped person as added
+ * against an empty store.
+ *
+ * `teamChanges`/`designationChanges` are the ONLY places a person's
+ * previous team/title value is ever recorded — `people[key].teams`/
+ * `.designation` always hold the latest known value, so these snap-entry
+ * fields are the sole historical record of what they used to be, exactly
+ * as `removed` + a frozen `present:false` profile already is for "who
+ * used to be here".
  *
  * @param {ReturnType<typeof emptyStore>} store
  * @param {ScrapedPerson[]} scraped
@@ -66,8 +109,15 @@ export function diffRoster(store, scraped) {
  * @param {"baseline"|"snap"} kind
  */
 export function applySnap(store, scraped, at, kind) {
-  const { added: rawAdded, removed } = diffRoster(store, scraped);
+  const {
+    added: rawAdded,
+    removed,
+    teamChanges: rawTeamChanges,
+    designationChanges: rawDesignationChanges,
+  } = diffRoster(store, scraped);
   const added = kind === "baseline" ? [] : rawAdded;
+  const teamChanges = kind === "baseline" ? [] : rawTeamChanges;
+  const designationChanges = kind === "baseline" ? [] : rawDesignationChanges;
 
   const people = { ...store.people };
   const removedSet = new Set(removed);
@@ -91,7 +141,7 @@ export function applySnap(store, scraped, at, kind) {
     if (people[key]) people[key] = { ...people[key], present: false };
   }
 
-  const snaps = [...store.snaps, { at, kind, total: scraped.length, added, removed }];
+  const snaps = [...store.snaps, { at, kind, total: scraped.length, added, removed, teamChanges, designationChanges }];
 
   return {
     ...store,
@@ -115,7 +165,10 @@ export function peopleFor(store, ids) {
 }
 
 /**
- * Everyone currently marked `present: false`, for the Former Members strip.
+ * Everyone currently marked `present: false`. Kept for its own tests even
+ * though the "Member changes" UI now builds from `buildChangeGroups()`
+ * below instead — still a correct, standalone answer to "who's gone right
+ * now".
  * @param {ReturnType<typeof emptyStore>} store
  */
 export function formerMembers(store) {
@@ -135,6 +188,98 @@ export function lastDepartureSnap(store, id) {
     if (store.snaps[i].removed.includes(target)) return store.snaps[i];
   }
   return null;
+}
+
+/**
+ * @typedef {{type: "added"|"removed"|"team-changed"|"designation-changed", at: string, personId: number, person: object|undefined, from?: string[]|string, to?: string[]|string}} ChangeEvent
+ */
+
+/**
+ * The individual per-person events ONE snap contributes — shared by
+ * `buildChangeFeed` (flattens every snap) and `buildChangeGroups` (keeps
+ * each snap's events nested under it). A baseline snap contributes NOTHING
+ * (its `added`/`removed`/`teamChanges`/`designationChanges` are always `[]`
+ * by construction — see applySnap) — it's a starting point, not an event.
+ *
+ * `person` is looked up in the CURRENT `store.people` — for `added`/`removed`
+ * this is deliberately the same "latest known / frozen at departure" value
+ * the old Former-members row already showed. For `team-changed`/
+ * `designation-changed`, `from`/`to` are taken verbatim from the snap
+ * itself, NOT re-read from `people`, so a later snap changing that person's
+ * team or title again doesn't retroactively corrupt this event's own
+ * before/after values.
+ * @param {ReturnType<typeof emptyStore>} store
+ * @param {ReturnType<typeof emptyStore>["snaps"][number]} snap
+ * @returns {ChangeEvent[]}
+ */
+function eventsForSnap(store, snap) {
+  const events = [];
+  for (const id of snap.removed) {
+    events.push({ type: "removed", at: snap.at, personId: id, person: store.people[personKey(id)] });
+  }
+  for (const id of snap.added) {
+    events.push({ type: "added", at: snap.at, personId: id, person: store.people[personKey(id)] });
+  }
+  for (const tc of snap.teamChanges ?? []) {
+    events.push({
+      type: "team-changed",
+      at: snap.at,
+      personId: tc.id,
+      person: store.people[personKey(tc.id)],
+      from: tc.from,
+      to: tc.to,
+    });
+  }
+  for (const dc of snap.designationChanges ?? []) {
+    events.push({
+      type: "designation-changed",
+      at: snap.at,
+      personId: dc.id,
+      person: store.people[personKey(dc.id)],
+      from: dc.from,
+      to: dc.to,
+    });
+  }
+  return events;
+}
+
+/**
+ * Flatten every snap's events into one reverse-chronological feed —
+ * kept for callers that just want "every change, in order" with no
+ * per-snapshot grouping. The "Member changes" UI itself now renders from
+ * `buildChangeGroups` below instead (see its docblock for why).
+ * @param {ReturnType<typeof emptyStore>} store
+ * @returns {ChangeEvent[]}
+ */
+export function buildChangeFeed(store) {
+  const events = [];
+  for (const snap of store.snaps) events.push(...eventsForSnap(store, snap));
+  return events.reverse();
+}
+
+/**
+ * @typedef {{index: number, at: string, kind: "baseline"|"snap", total: number, events: ChangeEvent[]}} ChangeGroup
+ */
+
+/**
+ * One group per snap — INCLUDING the baseline and any no-change snap, both
+ * of which carry an empty `events` array — so the "Member changes" section
+ * can show the full history in one place: where tracking began, every
+ * snapshot taken since, and (nested under each) exactly who changed and
+ * how. This replaces having two separate, disconnected views (a flat
+ * per-person feed with no trace of the baseline, plus a separate raw
+ * snapshot-history list) with one.
+ *
+ * `index` is the snap's position in `store.snaps` — NOT the position in
+ * this reversed, newest-first result — because that's what a per-snapshot
+ * delete operates on (`deleteSnap()`).
+ * @param {ReturnType<typeof emptyStore>} store
+ * @returns {ChangeGroup[]}
+ */
+export function buildChangeGroups(store) {
+  return store.snaps
+    .map((snap, index) => ({ index, at: snap.at, kind: snap.kind, total: snap.total, events: eventsForSnap(store, snap) }))
+    .reverse();
 }
 
 /**
@@ -158,16 +303,27 @@ export function formatSnapTime(iso) {
 }
 
 /**
- * Validate/upgrade a raw value loaded from storage. Identity for the current
- * version; refuses (returns null) anything it doesn't recognize rather than
- * silently reinterpreting a shape it wasn't written for. A future v2 gets a
- * real migration step added here, in front of this check.
+ * Validate/upgrade a raw value loaded from storage OR imported from a file
+ * a user picked. Identity for the current version; refuses (returns null)
+ * anything it doesn't recognize rather than silently reinterpreting a shape
+ * it wasn't written for. A future v2 gets a real migration step added here,
+ * in front of this check.
+ *
+ * The shape check (`snaps` an array, `people` an object) matters more than
+ * it looks: this function used to only ever see the extension's OWN
+ * previously-saved data, where `v === 1` was enough because nothing else
+ * could have written a `{v: 1, ...}` object into this storage key. Import
+ * hands it an arbitrary user-picked file, a much less trusted input — a
+ * hand-edited or truncated file can easily claim `v: 1` while missing
+ * `snaps`/`people` entirely, and without this check that garbage would
+ * sail through as "valid" and crash the first thing that reads
+ * `store.snaps.length`.
  * @param {any} raw
  * @returns {ReturnType<typeof emptyStore>|null}
  */
 export function migrate(raw) {
   if (raw == null) return emptyStore();
-  if (raw.v === 1) return raw;
+  if (raw.v === 1 && Array.isArray(raw.snaps) && raw.people != null && typeof raw.people === "object") return raw;
   return null;
 }
 

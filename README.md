@@ -28,11 +28,18 @@ Available for **Chrome and Firefox**, built from one source tree.
   no network requests of its own.
 
 - **Member directory tracker** *(opt-in)*: on the Team Members page, click **Track** to record the
-  current roster, then **Snap** any time after to see who joined and who left since the last time
-  you checked — with a timeline of every snap and a "Former members" list for anyone no longer on
-  the page. Nothing is recorded until you click Track, and **Untrack** deletes the history
-  permanently (with a confirmation). Only what the page itself displays is stored — name, username,
-  designation, team and photo — never email, phone, or anything read from the portal's private API.
+  current roster, then **Snap** any time after to see what's changed since the last time you
+  checked. The "Member changes" list groups every snapshot ever taken — oldest at the bottom,
+  marking where tracking began — and shows, per snapshot, exactly who joined, who left, whose team
+  changed, and whose position/title changed (Added in green, Removed in red, Team/Position changed
+  as "Old → New", right next to each name so it's easy to scan). Snap only ever reads the page and
+  asks you to confirm before recording anything — it never modifies the member directory itself (no
+  badges, no tags on any card). Nothing is recorded until you click Track, and **Untrack** deletes
+  the history permanently (with a confirmation). **Export** saves the whole history to a file;
+  **Import** (offered before you Track, and refused if a history already exists) restores it —
+  useful when you switch browsers or computers. Only what the page itself displays is stored —
+  name, username, designation, team and photo — never email, phone, or anything read from the
+  portal's private API.
 
 ## Installation
 
@@ -91,13 +98,15 @@ other manifest entry relevant to access is a `content_scripts.matches` pattern s
 from that match pattern alone, and nothing broader is requested. The extension:
 
 - never makes a network request of its own (no `fetch`, no `XMLHttpRequest`) — the one exception is
-  the member-tracker's Former Members thumbnails, which are ordinary `<img>` tags pointing at an
+  the member tracker's "Member changes" thumbnails, which are ordinary `<img>` tags pointing at an
   avatar URL the portal itself already rendered on the page, not a request the extension
   originates;
 - never reads `localStorage`, cookies, or any authentication token — `storage` is Chrome's/
   Firefox's own extension storage API (`chrome.storage.local`), never the portal's `localStorage`;
-- only reads and modifies the DOM of the attendance table, the "Attendance Status" summary area,
-  and the member directory grid already rendered on the page, and only on the Cefalo HR Portal;
+- only reads and modifies the DOM of the attendance table and the "Attendance Status" summary area;
+  the member directory grid is only ever **read** (to scrape the visible roster) — the member
+  tracker's own UI lives entirely in a separate box next to the grid, and the extension never
+  injects anything into a member's own card;
 - the member tracker only stores what the directory page visibly displays — name, username,
   designation, team, and an avatar URL — never email, phone, or any field read from the portal's
   authenticated JSON API; nothing is recorded until the user clicks **Track**, and **Untrack**

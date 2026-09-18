@@ -42,11 +42,11 @@ export function getHeaderTexts(wrapper) {
 }
 
 /**
- * `totalIdx`/`statusIdx` are -1, not a bail, when the portal doesn't have
- * those columns — only Start/End Time are load-bearing for the column
- * itself; the Today panel treats them as optional enrichment (D9).
+ * `statusIdx` is -1, not a bail, when the portal doesn't have that column —
+ * only Start/End Time are load-bearing for the column itself; the Today
+ * panel treats status as optional enrichment.
  * @param {string[]} headerTexts
- * @returns {{srcIdx:number, endIdx:number, insertAt:number, totalIdx:number, statusIdx:number}|null}
+ * @returns {{srcIdx:number, endIdx:number, insertAt:number, statusIdx:number}|null}
  */
 export function computeIndices(headerTexts) {
   const srcIdx = headerTexts.indexOf(HEADER_TEXT.startTime);
@@ -56,7 +56,6 @@ export function computeIndices(headerTexts) {
     srcIdx,
     endIdx,
     insertAt: endIdx + 1,
-    totalIdx: headerTexts.indexOf(HEADER_TEXT.totalWorkHour),
     statusIdx: headerTexts.indexOf(HEADER_TEXT.status),
   };
 }

@@ -15,10 +15,8 @@ import {
   scrapeCard,
   createDirectoryBar,
   renderDirectoryBar,
-  clearBadges,
-  paintBadges,
 } from "./directory.js";
-import { emptyStore, applySnap, diffRoster, deleteSnap, peopleFor, formerMembers, lastDepartureSnap, formatSnapTime } from "../lib/roster.js";
+import { emptyStore, applySnap, diffRoster, deleteSnap, buildChangeGroups, migrate, formatSnapTime } from "../lib/roster.js";
 import { loadStore, saveStore, clearStore, watchStore } from "../lib/storage.js";
 import { MEMBERS_ROUTE_RE, DIR_ATTR, DIR_READY_ATTR, DIR_BUILDS_ATTR, DIR_SNAPS_ATTR, MIN_ABSOLUTE_CARDS } from "../lib/config.js";
 import { withApplying } from "./applying.js";
@@ -36,16 +34,23 @@ let dirSnapCount = 0;
 // UI-only state that doesn't belong in storage.
 let busy = false;
 let error = "";
-let formerExpanded = false;
+let changesExpanded = false;
 let snapConfirmArmed = false; // user has seen the delta confirm and can now click through
 let snapConfirmText = ""; // computed once, when armed — from the SAME diff that decided to arm it
 let untrackConfirming = false;
 let deleteSnapConfirmIndex = null; // index into cache.snaps pending a delete confirm, or null
 // The whole bar collapses under one toggle, collapsed by default — this is
-// deliberately session-only (not stored), matching formerExpanded/etc. above:
+// deliberately session-only (not stored), matching changesExpanded/etc. above:
 // it's a view preference, not tracking data, and resets to the calm default
 // on every fresh page load rather than accumulating as one more storage field.
 let collapsed = true;
+
+// Display-only cap on the "Member changes" list, in SNAPSHOTS (groups), not
+// individual events — the full history always stays in storage/export, this
+// only bounds how many groups get built into the DOM at once so a
+// long-lived tracker with hundreds of snapshots doesn't render them all on
+// every expand.
+const CHANGE_GROUPS_DISPLAY_CAP = 50;
 
 // Local, tighter burst guard: if OUR OWN rebuilds are thrashing, disable
 // only this feature and stop triggering further work — which is also what
@@ -110,7 +115,7 @@ function sweepOrphanBars() {
 /**
  * Idempotent ensure-present, mirroring ensurePanel() in attendance.js:
  * build once, then only move/repaint — never tear down and rebuild a
- * working bar, which would collapse the Former-members expansion and the
+ * working bar, which would collapse the Member-changes expansion and the
  * selected timeline snap on every debounce tick.
  */
 export function syncMembers() {
@@ -144,10 +149,9 @@ function teardownDirectory() {
   bar = null;
   epoch += 1; // discard any in-flight async result targeting the old bar
   stopWatching();
-  clearBadges();
   busy = false;
   error = "";
-  formerExpanded = false;
+  changesExpanded = false;
   snapConfirmArmed = false;
   snapConfirmText = "";
   untrackConfirming = false;
@@ -206,7 +210,6 @@ function repaint() {
     // other state, including "not tracking" — a first Track click while
     // filtered would bake a wrong baseline in just as badly as a Snap would.
     if (location.search !== "") {
-      clearBadges();
       renderDirectoryBar(bar.refs, { kind: "filtered", collapsed, headSummary }, formatSnapTime);
       return;
     }
@@ -217,17 +220,20 @@ function repaint() {
       return;
     }
 
+    // The grid is only ever READ here — never written to. Every visible
+    // consequence of a snap lives inside this bar's "Member changes" list,
+    // not on the portal's own cards.
     const cards = findMemberCards();
     const scraped = cards.map(scrapeCard).filter(Boolean);
 
-    const former = formerMembers(cache);
-    const formerDetails = formerExpanded
-      ? former.map((person) => {
-          const key = Object.keys(cache.people).find((k) => cache.people[k] === person);
-          const snap = key ? lastDepartureSnap(cache, key) : null;
-          return { person, leftAtText: snap ? formatSnapTime(snap.at) : "unknown" };
-        })
-      : [];
+    // One group per snapshot ever taken, INCLUDING the baseline — that's
+    // what makes "where tracking began" visible instead of silently
+    // dropped, and what replaces the separate raw snapshot-history list
+    // this bar used to show below Member changes.
+    const fullGroups = buildChangeGroups(cache);
+    const changeGroups = changesExpanded ? fullGroups.slice(0, CHANGE_GROUPS_DISPLAY_CAP) : [];
+    const changeGroupsMore = changesExpanded ? Math.max(0, fullGroups.length - CHANGE_GROUPS_DISPLAY_CAP) : 0;
+    const changeEventTotal = fullGroups.reduce((n, g) => n + g.events.length, 0);
 
     // Only valid while cache.snaps still has that index (a delete elsewhere,
     // e.g. another open tab, can invalidate a pending confirm out from under it).
@@ -246,10 +252,10 @@ function repaint() {
         collapsed,
         headSummary,
         currentCount: scraped.length,
-        formerMembers: former,
-        formerExpanded,
-        formerDetails,
-        snaps: cache.snaps,
+        changeEventTotal,
+        changesExpanded,
+        changeGroups,
+        changeGroupsMore,
         snapConfirmText: snapConfirmArmed ? snapConfirmText : null,
         deleteSnapConfirmText: deleteTarget
           ? `Delete the snapshot from ${formatSnapTime(deleteTarget.at)}? This cannot be undone.`
@@ -258,24 +264,22 @@ function repaint() {
       },
       formatSnapTime
     );
-
-    // Badge whatever snap is "selected" — for a first pass, the most recent
-    // one, so the newest joiners are visible without an extra click.
-    clearBadges();
-    const latest = cache.snaps[cache.snaps.length - 1];
-    if (latest && latest.added.length) paintBadges(new Set(latest.added));
   });
 }
 
 /**
  * Describes a real, non-empty diff before the user commits it — shown for
- * EVERY snap that would change something, not only a shrink; a no-change
- * snap never reaches here at all (see doSnap()).
+ * EVERY snap that would change something (joins, leaves, team
+ * reassignments, OR position changes — not only add/remove), never only a
+ * shrink; a snap with none of the four never reaches here at all (see
+ * doSnap()).
  */
-function deltaMessage(added, removed) {
+function deltaMessage(added, removed, teamChanges, designationChanges) {
   const parts = [];
   if (added > 0) parts.push(`${added} joined`);
   if (removed > 0) parts.push(`${removed} left`);
+  if (teamChanges > 0) parts.push(`${teamChanges} team change${teamChanges === 1 ? "" : "s"}`);
+  if (designationChanges > 0) parts.push(`${designationChanges} position change${designationChanges === 1 ? "" : "s"}`);
   return `Record this snapshot? ${parts.join(", ")} since the last one.`;
 }
 
@@ -322,9 +326,10 @@ async function doSnap(kind) {
   const base = fresh.store;
 
   if (kind === "snap" && !snapConfirmArmed) {
-    const { added, removed } = diffRoster(base, scraped);
-    if (added.length === 0 && removed.length === 0) {
-      // Nothing changed — don't write a snapshot at all, not even a
+    const { added, removed, teamChanges, designationChanges } = diffRoster(base, scraped);
+    if (added.length === 0 && removed.length === 0 && teamChanges.length === 0 && designationChanges.length === 0) {
+      // Nothing changed — not a join, a leave, a team reassignment, or a
+      // position change — so don't write a snapshot at all, not even a
       // no-op one. The timeline already has a "no change" rendering for
       // when this DID used to happen; refusing outright is simpler and
       // keeps storage from growing on every idle click of the button.
@@ -332,7 +337,7 @@ async function doSnap(kind) {
       return;
     }
     snapConfirmArmed = true;
-    snapConfirmText = deltaMessage(added.length, removed.length);
+    snapConfirmText = deltaMessage(added.length, removed.length, teamChanges.length, designationChanges.length);
     return; // render the confirm; the next click actually snaps
   }
 
@@ -350,6 +355,11 @@ async function doSnap(kind) {
   document.documentElement.setAttribute(DIR_SNAPS_ATTR, String(dirSnapCount));
 }
 
+// `cache` IS already the whole store — every snap ever taken (`snaps[]`)
+// and every person ever seen, including present:false former members
+// (`people`) — not just who's on screen right now. Exporting it verbatim
+// is what makes Import (below) a faithful round-trip: the same object
+// `migrate()` already validates on every ordinary storage load.
 function exportStore() {
   if (!cache) return;
   const blob = new Blob([JSON.stringify(cache, null, 2)], { type: "application/json" });
@@ -359,6 +369,55 @@ function exportStore() {
   a.download = `cefalo-members-tracking-${new Date().toISOString().slice(0, 10)}.json`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+/**
+ * Restore a whole history exported from another browser/computer. Only
+ * ever reachable from the "not-tracking" state (see createDirectoryBar()),
+ * but re-checks that fresh — right before writing, not just at the moment
+ * the button was clicked — since the native file picker can stay open for
+ * an arbitrary amount of time and tracking could start (e.g. in another
+ * tab) while it's up. Refuses outright rather than overwrite anything.
+ * @param {File} file
+ * @param {number} myEpoch
+ */
+async function doImport(file, myEpoch) {
+  const fresh = await loadStore();
+  if (myEpoch !== epoch) return;
+  if (!fresh.ok) {
+    error = fresh.error;
+    return;
+  }
+  if (fresh.store.snaps.length > 0) {
+    error = "Tracking already started — import is only available before you start.";
+    return;
+  }
+
+  let raw;
+  try {
+    raw = JSON.parse(await file.text());
+  } catch {
+    error = "Couldn't read that file — is it a tracking export?";
+    return;
+  }
+  if (myEpoch !== epoch) return;
+
+  const imported = migrate(raw);
+  if (!imported) {
+    error = "That file isn't a tracking export this version recognizes.";
+    return;
+  }
+
+  const saved = await saveStore(imported);
+  if (myEpoch !== epoch) return;
+  if (!saved.ok) {
+    error = saved.error;
+    return;
+  }
+  cache = imported;
+  error = "";
+  dirSnapCount += 1;
+  document.documentElement.setAttribute(DIR_SNAPS_ATTR, String(dirSnapCount));
 }
 
 function wireHandlers() {
@@ -372,8 +431,21 @@ function wireHandlers() {
   refs.trackBtn.addEventListener("click", () => withBusy(() => doSnap("baseline")));
   refs.snapBtn.addEventListener("click", () => withBusy(() => doSnap("snap")));
 
-  refs.formerHeader.addEventListener("click", () => {
-    formerExpanded = !formerExpanded;
+  // importBtn's click is the user gesture the browser requires to honor a
+  // programmatic file-picker open — it must fire synchronously here, never
+  // after an await. The actual read/validate/save work happens in
+  // doImport(), triggered by the input's own "change" once a file is
+  // picked (or never, if the dialog is cancelled).
+  refs.importBtn.addEventListener("click", () => refs.importInput.click());
+  refs.importInput.addEventListener("change", () => {
+    const file = refs.importInput.files?.[0];
+    refs.importInput.value = ""; // reset so picking the SAME file again still fires "change"
+    if (!file) return;
+    withBusy((myEpoch) => doImport(file, myEpoch));
+  });
+
+  refs.changesHeader.addEventListener("click", () => {
+    changesExpanded = !changesExpanded;
     repaint();
   });
 
@@ -408,9 +480,9 @@ function wireHandlers() {
   });
   refs.snapConfirmYes.addEventListener("click", () => withBusy(() => doSnap("snap")));
 
-  // Delegated: one listener for however many delete buttons the timeline
-  // currently renders, rather than rewiring on every repaint.
-  refs.timeline.addEventListener("click", (e) => {
+  // Delegated: one listener for however many group delete buttons Member
+  // changes currently renders, rather than rewiring on every repaint.
+  refs.changesList.addEventListener("click", (e) => {
     const btn = e.target.closest("[data-cto-dir-del-index]");
     if (!btn) return;
     deleteSnapConfirmIndex = Number(btn.dataset.ctoDirDelIndex);

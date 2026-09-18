@@ -95,7 +95,9 @@ export function createPanel(mode) {
  * @param {"rail"|"modal"} mode
  */
 function panelChromeClass(mode) {
-  return mode === "modal" ? "cto-panel cto-panel--modal" : "ant-card ant-card-bordered cto-panel";
+  return mode === "modal"
+    ? "cto-panel cto-panel--modal"
+    : "ant-card ant-card-bordered cto-panel";
 }
 
 /**
@@ -122,7 +124,8 @@ export function renderPanel(refs, state) {
     }
     case "waiting": {
       refs.countdownText.data = "—";
-      refs.labelText.data = "Not clocked in yet — the countdown starts once a Start Time appears.";
+      refs.labelText.data =
+        "Not clocked in yet — the countdown starts once a Start Time appears.";
       refs.barFill.style.width = "0%";
       refs.startMetaText.data = "";
       refs.endMetaText.data = "";
@@ -133,25 +136,22 @@ export function renderPanel(refs, state) {
       refs.labelText.data = `until ${state.end}`;
       refs.barFill.style.width = `${Math.round(state.ratio * 100)}%`;
       refs.startMetaText.data = `In ${state.start}`;
-      refs.endMetaText.data = `In office ${state.inOffice}`;
+      // "Time Spent", not "In office" — the panel has no signal for whether
+      // the person is still physically present (see derivePanelState's
+      // docblock), so this reports elapsed-since-clock-in, not a presence
+      // claim it can't back.
+      refs.endMetaText.data = `Time Spent: ${state.inOffice}`;
       break;
     }
-    case "overtime": {
-      refs.countdownText.data = `+${state.over}`;
+    case "timeup": {
+      // Frozen, not a growing overtime counter — the countdown stops the
+      // instant Secure End Time is reached and stays on this message,
+      // rather than counting how far past it you've gone.
+      refs.countdownText.data = "Time's up!";
       refs.labelText.data = `past ${state.end} — you're clear to go`;
       refs.barFill.style.width = "100%";
       refs.startMetaText.data = `In ${state.start}`;
-      refs.endMetaText.data = `In office ${state.inOffice}`;
-      break;
-    }
-    case "done": {
-      refs.countdownText.data = "";
-      refs.labelText.data = "Checked out";
-      refs.barFill.style.width = "100%";
-      refs.startMetaText.data = `In ${state.start} · Out ${state.end}`;
-      // Quoted verbatim from the portal's own Total Work Hour cell — never
-      // recomputed (see lib/time.js#derivePanelState docblock, D8).
-      refs.endMetaText.data = state.portalTotal;
+      refs.endMetaText.data = `Time Spent: ${state.inOffice}`;
       break;
     }
   }

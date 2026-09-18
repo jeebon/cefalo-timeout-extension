@@ -29,6 +29,7 @@ import {
   rowDateFromKey,
   localDateKey,
   derivePanelState,
+  isOvernightRowStillRelevant,
 } from "../lib/time.js";
 import {
   ROUTE_RE,
@@ -113,12 +114,21 @@ function captureTodayRowSnapshot(wrapper, indices) {
     }
   }
 
-  // No row for today yet — an overnight shift from yesterday still counts
-  // if it hasn't been checked out (End Time still blank/00:00).
+  // No row for today yet — an overnight shift from yesterday still counts,
+  // but no longer decided by yesterday's End Time cell: that field is
+  // rewritten on every ID-card punch, not just a final checkout, so "End
+  // Time is non-empty" was never real evidence the shift had ended — it
+  // used to make a punch anywhere during the night reject yesterday's row
+  // entirely and tear the panel down (see CLAUDE.md). Bounded instead by
+  // isOvernightRowStillRelevant (Start Time + duration only), which also
+  // keeps this from matching every ordinary completed previous day, every
+  // single morning, for the hours before today's own row exists.
   for (const row of rows) {
     if (rowDateFromKey(row.getAttribute("data-row-key") || "") !== yesterdayKey) continue;
-    const endText = cellText(row, indices.endIdx);
-    if (endText === "" || endText === "00:00") return rowSnapshot(row, indices, yesterdayKey);
+    const startText = cellText(row, indices.srcIdx);
+    if (isOvernightRowStillRelevant(startText, yesterdayKey, new Date(), SAFE_DURATION_MINUTES)) {
+      return rowSnapshot(row, indices, yesterdayKey);
+    }
   }
 
   return null;
@@ -129,8 +139,6 @@ function rowSnapshot(row, indices, rowDateKey) {
     hasRow: true,
     rowDateKey,
     startText: cellText(row, indices.srcIdx),
-    endText: cellText(row, indices.endIdx),
-    portalTotalText: cellText(row, indices.totalIdx),
     statusText: cellText(row, indices.statusIdx),
   };
 }
@@ -245,22 +253,31 @@ function renderPanelNow() {
 
 /**
  * Edge-crossing only, never a level check: alert exactly when the state
- * transitions INTO overtime, never merely because it currently IS overtime.
+ * transitions INTO timeup, never merely because it currently IS timeup.
  * `previousPanelKind === null` guards the first render after every panel
  * (re)build, so reloading the page after the end time has already passed
  * produces no stale alarm — only a live crossing during the session does.
+ *
+ * There is no state after `timeup` to fall back out of it into (the
+ * countdown is frozen, not merely delayed), so once applied the title
+ * prefix is re-asserted every tick for the rest of the session — it only
+ * clears via clearTitleAlert() on teardown (route leave, mount gone, or the
+ * panel being rebuilt). That also means a rebuild (e.g. crossing the
+ * rail/modal breakpoint) resets `previousPanelKind` to null and silently
+ * suppresses the *next* alert, since the guard above can't tell a fresh
+ * build from a resumed session — a known, accepted gap, not a new one.
  */
 function updateTitleAlert(state) {
-  const wasOvertime = previousPanelKind === "overtime";
-  const isOvertime = state.kind === "overtime";
+  const wasTimeup = previousPanelKind === "timeup";
+  const isTimeup = state.kind === "timeup";
 
-  if (isOvertime && !wasOvertime && previousPanelKind !== null) {
+  if (isTimeup && !wasTimeup && previousPanelKind !== null) {
     if (baseTitle === null) baseTitle = document.title;
     document.title = PANEL_TITLE_PREFIX + baseTitle;
     titleAlertActive = true;
-  } else if (!isOvertime && titleAlertActive) {
+  } else if (!isTimeup && titleAlertActive) {
     clearTitleAlert();
-  } else if (isOvertime && titleAlertActive) {
+  } else if (isTimeup && titleAlertActive) {
     // Re-apply in case something else (an SPA re-render) overwrote it.
     document.title = PANEL_TITLE_PREFIX + baseTitle;
   }

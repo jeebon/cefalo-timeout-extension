@@ -3,7 +3,7 @@
 // WHAT to show and WHEN; this file only knows HOW to find the mount, scrape
 // a card, and paint a view-state into the bar it built.
 
-import { DIR_ATTR, DIR_READY_ATTR, DIR_BADGE_ATTR } from "../lib/config.js";
+import { DIR_ATTR, DIR_READY_ATTR } from "../lib/config.js";
 
 const AVATAR_SELECTOR = 'img[src*="/api/avatars/"]';
 const PROFILE_LINK_SELECTOR = 'a[href^="/profile/view/?id="]';
@@ -15,7 +15,9 @@ const PROFILE_LINK_SELECTOR = 'a[href^="/profile/view/?id="]';
  * kind of string that gets rewritten on a layout tweak.
  */
 function nonHeaderAvatarImgs() {
-  return [...document.querySelectorAll(AVATAR_SELECTOR)].filter((img) => !img.closest("header"));
+  return [...document.querySelectorAll(AVATAR_SELECTOR)].filter(
+    (img) => !img.closest("header"),
+  );
 }
 
 /**
@@ -28,7 +30,10 @@ function nonHeaderAvatarImgs() {
 function cardFor(img) {
   let node = img;
   for (let i = 0; i < 8 && node; i++) {
-    if (node.querySelector(PROFILE_LINK_SELECTOR) && node.querySelectorAll(AVATAR_SELECTOR).length === 1) {
+    if (
+      node.querySelector(PROFILE_LINK_SELECTOR) &&
+      node.querySelectorAll(AVATAR_SELECTOR).length === 1
+    ) {
       return node;
     }
     node = node.parentElement;
@@ -66,7 +71,10 @@ export function scrapeCard(card) {
 
   let userId;
   try {
-    const b64 = new URL(link.getAttribute("href"), location.origin).searchParams.get("id") || "";
+    const b64 =
+      new URL(link.getAttribute("href"), location.origin).searchParams.get(
+        "id",
+      ) || "";
     userId = Number(atob(b64.replace(/-/g, "+").replace(/_/g, "/")));
   } catch {
     return null; // malformed href — skip this one card, not the whole scrape
@@ -77,12 +85,24 @@ export function scrapeCard(card) {
   const name = nameEl ? nameEl.textContent.trim() : "";
   if (!name) return null;
 
-  const paragraphs = [...card.querySelectorAll("p")].filter((p) => !link.contains(p));
-  const usernameIdx = paragraphs.findIndex((p) => p.textContent.trim().startsWith("@"));
-  const username = usernameIdx >= 0 ? paragraphs[usernameIdx].textContent.trim() : "";
-  const rest = usernameIdx >= 0 ? paragraphs.slice(usernameIdx + 1) : paragraphs;
+  const paragraphs = [...card.querySelectorAll("p")].filter(
+    (p) => !link.contains(p),
+  );
+  const usernameIdx = paragraphs.findIndex((p) =>
+    p.textContent.trim().startsWith("@"),
+  );
+  const username =
+    usernameIdx >= 0 ? paragraphs[usernameIdx].textContent.trim() : "";
+  const rest =
+    usernameIdx >= 0 ? paragraphs.slice(usernameIdx + 1) : paragraphs;
   const designation = rest[0] ? rest[0].textContent.trim() : "";
-  const teams = rest[1] ? rest[1].textContent.trim().split(",").map((t) => t.trim()).filter(Boolean) : [];
+  const teams = rest[1]
+    ? rest[1].textContent
+        .trim()
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean)
+    : [];
 
   const img = card.querySelector(AVATAR_SELECTOR);
   const photo = img ? img.src : "";
@@ -112,21 +132,23 @@ export function findDirectoryMount() {
   // whole grid, whatever its actual class names are.
   let gridNode = avatarImgs[0];
   for (let i = 0; i < 12 && gridNode; i++) {
-    if (gridNode.querySelectorAll(AVATAR_SELECTOR).length === avatarImgs.length) break;
+    if (gridNode.querySelectorAll(AVATAR_SELECTOR).length === avatarImgs.length)
+      break;
     gridNode = gridNode.parentElement;
   }
   if (!gridNode) return null;
 
-  const searchInput = [...document.querySelectorAll('input[placeholder="Search Name"]')].find(
-    (el) => el.offsetParent !== null
-  );
+  const searchInput = [
+    ...document.querySelectorAll('input[placeholder="Search Name"]'),
+  ].find((el) => el.offsetParent !== null);
   if (!searchInput) return null;
 
   // Walk up from the grid until we find the ancestor that also contains the
   // search input — that's the shared container both regions live in.
   let root = gridNode;
   while (root && !root.contains(searchInput)) root = root.parentElement;
-  if (!root || root === document.body || root === document.documentElement) return null;
+  if (!root || root === document.body || root === document.documentElement)
+    return null;
 
   // The specific child of `root` that is (or contains) the grid — insert
   // the bar as ITS previous sibling, not as a sibling of the grid itself,
@@ -140,7 +162,11 @@ export function findDirectoryMount() {
   // null. Bail to null (findDirectoryMount's normal "no safe mount" signal,
   // already handled by syncMembers() as teardown) instead of throwing.
   let reference = gridNode;
-  while (reference && reference.parentElement && reference.parentElement !== root) {
+  while (
+    reference &&
+    reference.parentElement &&
+    reference.parentElement !== root
+  ) {
     reference = reference.parentElement;
   }
   if (!reference || reference.parentElement !== root) return null;
@@ -183,32 +209,67 @@ export function createDirectoryBar() {
   const body = document.createElement("div");
   body.className = "cto-dir-body";
 
-  // Not-tracking view
+  // Not-tracking view — Track starts fresh; Import restores a history
+  // exported from another browser/computer. Import is only ever offered
+  // here, in the SAME branch as Track — "not tracking yet" and "nothing to
+  // overwrite" are the same condition in this data model (a person only
+  // ever enters `people` via applySnap, which always appends a snap), so
+  // there is no separate flag to keep in sync with this visibility rule.
   const trackRow = document.createElement("div");
   trackRow.className = "cto-dir-track-row";
+  const trackButtons = document.createElement("div");
+  trackButtons.className = "cto-dir-track-buttons";
   const trackBtn = document.createElement("button");
   trackBtn.type = "button";
   trackBtn.className = "cto-dir-btn cto-dir-btn-primary";
   trackBtn.textContent = "Track";
+  const importBtn = document.createElement("button");
+  importBtn.type = "button";
+  importBtn.className = "cto-dir-btn";
+  importBtn.textContent = "Import";
+  // Hidden — triggered programmatically by importBtn's own click handler
+  // (a real user gesture, so the browser honors the file-picker open).
+  // Reading a user-picked local file this way needs no extra manifest
+  // permission; it's unrelated to host_permissions/storage.
+  const importInput = document.createElement("input");
+  importInput.type = "file";
+  importInput.accept = "application/json";
+  importInput.hidden = true;
+  trackButtons.append(trackBtn, importBtn);
   const trackHint = document.createElement("p");
   trackHint.className = "cto-dir-hint";
-  trackHint.textContent = "Records the current list so you can see who joins or leaves later.";
-  trackRow.append(trackBtn, trackHint);
+  trackHint.textContent =
+    "Records the current list so you can see who joins or leaves later.";
+  const importHint = document.createElement("p");
+  importHint.className = "cto-dir-hint";
+  importHint.textContent =
+    "Or Import a file exported from another browser or computer to restore your history here.";
+  trackRow.append(trackButtons, trackHint, importHint, importInput);
 
-  // Tracking view — Former members strip
-  const formerSection = document.createElement("div");
-  formerSection.className = "cto-dir-former";
-  const formerHeader = document.createElement("button");
-  formerHeader.type = "button";
-  formerHeader.className = "cto-dir-former-header";
-  const formerHeaderText = document.createTextNode("Former members (0)");
-  formerHeader.appendChild(formerHeaderText);
-  const formerThumbs = document.createElement("div");
-  formerThumbs.className = "cto-dir-former-thumbs";
-  const formerList = document.createElement("div");
-  formerList.className = "cto-dir-former-list";
-  formerList.hidden = true;
-  formerSection.append(formerHeader, formerThumbs, formerList);
+  // Tracking view — Member changes: the FULL history, one group per
+  // snapshot ever taken (see roster.js#buildChangeGroups) — replaces both
+  // the earlier Former-members-only strip AND the separate raw "Timeline"
+  // section that used to sit below this one. Each group's header is the
+  // same "when + what happened" line the old Timeline rows showed
+  // ("Started tracking · N people", "+2 −1 · 1 team change", "no change"),
+  // now also the visible marker of where tracking began — a group is shown
+  // for EVERY snap, baseline included, even though the baseline itself has
+  // no individual join/leave/team-change rows nested under it. There is no
+  // separate collapsed thumbnail row — a thumbnail alone doesn't
+  // distinguish three event types — so the header (with a running count)
+  // is the only collapsed view, expanding straight into the full grouped
+  // history.
+  const changesSection = document.createElement("div");
+  changesSection.className = "cto-dir-changes";
+  const changesHeader = document.createElement("button");
+  changesHeader.type = "button";
+  changesHeader.className = "cto-dir-changes-header";
+  const changesHeaderText = document.createTextNode("Changes history (0)");
+  changesHeader.appendChild(changesHeaderText);
+  const changesList = document.createElement("div");
+  changesList.className = "cto-dir-changes-list";
+  changesList.hidden = true;
+  changesSection.append(changesHeader, changesList);
 
   // Tracking view — action row
   const actionRow = document.createElement("div");
@@ -231,7 +292,8 @@ export function createDirectoryBar() {
   untrackConfirm.className = "cto-dir-confirm";
   untrackConfirm.hidden = true;
   const untrackConfirmText = document.createElement("span");
-  untrackConfirmText.textContent = "Delete all tracking history? This cannot be undone.";
+  untrackConfirmText.textContent =
+    "Delete all tracking history? This cannot be undone.";
   const untrackConfirmYes = document.createElement("button");
   untrackConfirmYes.type = "button";
   untrackConfirmYes.className = "cto-dir-btn cto-dir-btn-danger";
@@ -240,7 +302,11 @@ export function createDirectoryBar() {
   untrackConfirmNo.type = "button";
   untrackConfirmNo.className = "cto-dir-btn";
   untrackConfirmNo.textContent = "Cancel";
-  untrackConfirm.append(untrackConfirmText, untrackConfirmYes, untrackConfirmNo);
+  untrackConfirm.append(
+    untrackConfirmText,
+    untrackConfirmYes,
+    untrackConfirmNo,
+  );
 
   // Snap delta confirm — states exactly what it's about to record (who
   // joined, who left) instead of saving silently. Shown for EVERY snap that
@@ -261,8 +327,8 @@ export function createDirectoryBar() {
   snapConfirm.append(snapConfirmText, snapConfirmYes, snapConfirmNo);
 
   // Delete-one-snapshot confirm. Never offered for the baseline (index 0,
-  // see the "✕" omission in timelineRow below) — that one is only removable
-  // via Untrack, which deletes the whole history at once.
+  // see the "✕" omission in changeGroupHeader below) — that one is only
+  // removable via Untrack, which deletes the whole history at once.
   const deleteConfirm = document.createElement("div");
   deleteConfirm.className = "cto-dir-confirm";
   deleteConfirm.hidden = true;
@@ -287,13 +353,20 @@ export function createDirectoryBar() {
   // aside rather than risk recording a partial list as history.
   const filteredMessage = document.createElement("p");
   filteredMessage.className = "cto-dir-hint";
-  filteredMessage.textContent = "Clear filters to use tracking — a filtered list isn't the full roster.";
+  filteredMessage.textContent =
+    "Clear filters to use tracking — a filtered list isn't the full roster.";
   filteredMessage.hidden = true;
 
-  const timeline = document.createElement("div");
-  timeline.className = "cto-dir-timeline";
-
-  body.append(filteredMessage, trackRow, formerSection, actionRow, untrackConfirm, snapConfirm, deleteConfirm, errorText, timeline);
+  body.append(
+    filteredMessage,
+    trackRow,
+    changesSection,
+    actionRow,
+    untrackConfirm,
+    snapConfirm,
+    deleteConfirm,
+    errorText,
+  );
   node.append(head, body);
 
   return {
@@ -306,11 +379,12 @@ export function createDirectoryBar() {
       filteredMessage,
       trackRow,
       trackBtn,
-      formerSection,
-      formerHeader,
-      formerHeaderText,
-      formerThumbs,
-      formerList,
+      importBtn,
+      importInput,
+      changesSection,
+      changesHeader,
+      changesHeaderText,
+      changesList,
       actionRow,
       snapBtn,
       untrackBtn,
@@ -327,7 +401,6 @@ export function createDirectoryBar() {
       deleteConfirmYes,
       deleteConfirmNo,
       errorText,
-      timeline,
     },
   };
 }
@@ -347,7 +420,7 @@ function thumb(person) {
     () => {
       img.replaceWith(initialsCircle(person.name));
     },
-    { once: true }
+    { once: true },
   );
   return img;
 }
@@ -364,61 +437,156 @@ function initialsCircle(name) {
   return el;
 }
 
-function formerRow(person, leftAtText) {
+/** @param {string[]} teams */
+function formatTeams(teams) {
+  return teams.length ? teams.join(", ") : "No team";
+}
+
+/** @param {string} designation */
+function formatDesignation(designation) {
+  return designation || "No title";
+}
+
+/**
+ * One row of the "Member changes" list — one join, leave or team
+ * reassignment, labeled by type. `event.person` can be `undefined` in
+ * principle (a malformed/partial store) — every field reads through an
+ * optional chain so a missing profile renders blanks rather than throwing.
+ *
+ * The label sits INLINE right after the name, in brackets, rather than
+ * pushed to the far right of the row — a far-right label makes the eye
+ * travel the full row width just to tell added from removed, which is
+ * exactly the "difficult to trace" complaint this addresses. No date is
+ * rendered per row either: the enclosing group header (see changeGroup()
+ * below) already carries this event's timestamp once, so repeating it on
+ * every row would be redundant, not just noisy.
+ *
+ * Only the bracketed label itself is colored, never the whole row/name —
+ * tinting every value (name, meta, thumbnail) would fight the "trace
+ * quickly" goal instead of serving it, and a red/green PAGE BACKGROUND for
+ * hundreds of potential rows would be far louder than this bar's existing
+ * minimal, text-colored language (`.cto-dir-error`/`.cto-dir-btn-danger`
+ * already use colored TEXT on a plain white row, never a tinted
+ * background) — colored text on just the label keeps that consistent.
+ * @param {import("../lib/roster.js").ChangeEvent} event
+ */
+function changeRow(event) {
   const row = document.createElement("div");
-  row.className = "cto-dir-former-row";
-  row.append(thumb(person));
+  row.className = "cto-dir-change-row";
+  row.append(thumb(event.person ?? { photo: "", name: "" }));
+
   const info = document.createElement("div");
-  info.className = "cto-dir-former-info";
+  info.className = "cto-dir-change-info";
+
+  const LABEL_TEXT = {
+    added: "(Added)",
+    removed: "(Removed)",
+    "team-changed": "(Team changed)",
+    "designation-changed": "(Position changed)",
+  };
+
   const nameEl = document.createElement("div");
-  nameEl.className = "cto-dir-former-name";
-  nameEl.textContent = person.name;
+  nameEl.className = "cto-dir-change-name";
+  nameEl.append(document.createTextNode(`${event.person?.name ?? "Unknown"} `));
+  const label = document.createElement("span");
+  label.className = `cto-dir-change-label cto-dir-change-label--${event.type}`;
+  label.textContent = LABEL_TEXT[event.type];
+  nameEl.append(label);
+
   const metaEl = document.createElement("div");
-  metaEl.className = "cto-dir-former-meta";
-  metaEl.textContent = [person.designation, person.teams.join(", ")].filter(Boolean).join(" · ");
-  const leftEl = document.createElement("div");
-  leftEl.className = "cto-dir-former-left";
-  leftEl.textContent = leftAtText;
-  info.append(nameEl, metaEl, leftEl);
+  metaEl.className = "cto-dir-change-meta";
+  if (event.type === "team-changed") {
+    metaEl.textContent = `${formatTeams(event.from)} → ${formatTeams(event.to)}`;
+  } else if (event.type === "designation-changed") {
+    metaEl.textContent = `${formatDesignation(event.from)} → ${formatDesignation(event.to)}`;
+  } else {
+    metaEl.textContent = [
+      event.person?.designation,
+      event.person?.teams?.join(", "),
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  }
+
+  info.append(nameEl, metaEl);
   row.append(info);
   return row;
 }
 
 /**
- * @param {object} snap
- * @param {(iso:string)=>string} formatLocal
- * @param {number} index this snap's position in store.snaps — needed by the
- *   delete button (deleteSnap() operates on that index), NOT the position in
- *   the reversed, newest-first list this row is rendered into.
+ * The same "when + what happened" text every snapshot has always shown
+ * (originally the standalone Timeline's row text; now this group's own
+ * header) — kept as one function so the wording can't drift between what
+ * used to be two places.
+ * @param {import("../lib/roster.js").ChangeGroup} group
  */
-function timelineRow(snap, formatLocal, index) {
-  const row = document.createElement("div");
-  row.className = "cto-dir-timeline-row";
+function changeGroupSummary(group) {
+  if (group.kind === "baseline")
+    return `Started tracking · ${group.total} people`;
+  const added = group.events.filter((e) => e.type === "added").length;
+  const removed = group.events.filter((e) => e.type === "removed").length;
+  const teamChanges = group.events.filter(
+    (e) => e.type === "team-changed",
+  ).length;
+  const designationChanges = group.events.filter(
+    (e) => e.type === "designation-changed",
+  ).length;
+  if (
+    added === 0 &&
+    removed === 0 &&
+    teamChanges === 0 &&
+    designationChanges === 0
+  )
+    return "no change";
+  const parts = [];
+  if (teamChanges)
+    parts.push(`${teamChanges} team change${teamChanges === 1 ? "" : "s"}`);
+  if (designationChanges)
+    parts.push(
+      `${designationChanges} position change${designationChanges === 1 ? "" : "s"}`,
+    );
+  const extra = parts.length ? ` · ${parts.join(" · ")}` : "";
+  return `+${added} −${removed}${extra}`;
+}
+
+/**
+ * One snapshot's worth of the "Member changes" list: a header naming when
+ * it was taken and what happened (identical wording to the old standalone
+ * Timeline row this replaces), plus that snapshot's own events nested
+ * underneath — none, for the baseline or a no-change snap, which is what
+ * makes the baseline's header double as the "beginning of history" marker
+ * rather than an empty gap.
+ * @param {import("../lib/roster.js").ChangeGroup} group
+ * @param {(iso:string)=>string} formatLocal
+ */
+function changeGroup(group, formatLocal) {
+  const wrap = document.createElement("div");
+  wrap.className = "cto-dir-change-group";
+
+  const header = document.createElement("div");
+  header.className = "cto-dir-change-group-header";
   const when = document.createElement("span");
-  when.className = "cto-dir-timeline-when";
-  when.textContent = formatLocal(snap.at);
+  when.className = "cto-dir-change-group-when";
+  when.textContent = formatLocal(group.at);
   const summary = document.createElement("span");
-  summary.className = "cto-dir-timeline-summary";
-  if (snap.kind === "baseline") {
-    summary.textContent = `Started tracking · ${snap.total} people`;
-  } else if (snap.added.length === 0 && snap.removed.length === 0) {
-    summary.textContent = "no change";
-  } else {
-    summary.textContent = `+${snap.added.length} −${snap.removed.length}`;
-  }
-  row.append(when, summary);
+  summary.className = "cto-dir-change-group-summary";
+  summary.textContent = changeGroupSummary(group);
+  header.append(when, summary);
   // The baseline (index 0) has no delete button — it's only removable via
   // Untrack, which clears the whole history at once (see roster.js#deleteSnap).
-  if (index > 0) {
+  if (group.index > 0) {
     const del = document.createElement("button");
     del.type = "button";
-    del.className = "cto-dir-timeline-del";
+    del.className = "cto-dir-change-group-del";
     del.title = "Delete this snapshot";
     del.textContent = "✕";
-    del.dataset.ctoDirDelIndex = String(index);
-    row.append(del);
+    del.dataset.ctoDirDelIndex = String(group.index);
+    header.append(del);
   }
-  return row;
+  wrap.append(header);
+
+  for (const event of group.events) wrap.append(changeRow(event));
+  return wrap;
 }
 
 /**
@@ -445,28 +613,29 @@ export function renderDirectoryBar(refs, state, formatLocal) {
   refs.headSummary.textContent = state.headSummary || "";
   refs.body.hidden = !!state.collapsed;
 
-  // "filtered" hides EVERYTHING else — Track, Snap/Untrack, Former members,
-  // the timeline, even a pending error — because none of it is trustworthy
-  // against a subset of the roster. This check comes first so nothing below
-  // has to separately remember to also check for it.
+  // "filtered" hides EVERYTHING else — Track, Snap/Untrack, Member changes,
+  // even a pending error — because none of it is trustworthy against a
+  // subset of the roster. This check comes first so nothing below has to
+  // separately remember to also check for it.
   refs.filteredMessage.hidden = state.kind !== "filtered";
   if (state.kind === "filtered") {
     refs.trackRow.hidden = true;
-    refs.formerSection.hidden = true;
+    refs.changesSection.hidden = true;
     refs.actionRow.hidden = true;
     refs.untrackConfirm.hidden = true;
     refs.snapConfirm.hidden = true;
     refs.deleteConfirm.hidden = true;
     refs.errorText.hidden = true;
-    refs.timeline.innerHTML = "";
+    refs.changesList.innerHTML = "";
     return;
   }
 
   refs.trackRow.hidden = state.kind !== "not-tracking";
   refs.trackBtn.disabled = state.kind === "not-tracking" && state.busy;
+  refs.importBtn.disabled = state.kind === "not-tracking" && state.busy;
 
   const tracking = state.kind === "tracking";
-  refs.formerSection.hidden = !tracking;
+  refs.changesSection.hidden = !tracking;
   refs.actionRow.hidden = !tracking;
 
   refs.errorText.hidden = !state.error;
@@ -478,62 +647,34 @@ export function renderDirectoryBar(refs, state, formatLocal) {
     refs.exportBtn.disabled = state.busy;
     refs.snapBtn.textContent = `Snap · ${state.currentCount} people`;
 
-    refs.formerHeaderText.data = `Former members (${state.formerMembers.length})`;
-    refs.formerThumbs.innerHTML = "";
-    for (const p of state.formerMembers.slice(0, 24)) refs.formerThumbs.appendChild(thumb(p));
-    refs.formerList.hidden = !state.formerExpanded;
-    if (state.formerExpanded) {
-      refs.formerList.innerHTML = "";
-      for (const { person, leftAtText } of state.formerDetails) {
-        refs.formerList.appendChild(formerRow(person, leftAtText));
+    refs.changesHeaderText.data = `Member changes (${state.changeEventTotal})`;
+    refs.changesList.hidden = !state.changesExpanded;
+    if (state.changesExpanded) {
+      refs.changesList.innerHTML = "";
+      // Already newest-first, index preserved per group — see
+      // roster.js#buildChangeGroups. The oldest group (the baseline) is
+      // what shows up last here, which is what makes it "the beginning" of
+      // this history rather than an unmarked gap.
+      for (const group of state.changeGroups)
+        refs.changesList.appendChild(changeGroup(group, formatLocal));
+      if (state.changeGroupsMore > 0) {
+        const more = document.createElement("div");
+        more.className = "cto-dir-changes-more";
+        more.textContent = `+${state.changeGroupsMore} earlier snapshot${state.changeGroupsMore === 1 ? "" : "s"}`;
+        refs.changesList.appendChild(more);
       }
     }
-
-    // Reversed for display (newest first) but each row keeps its ORIGINAL
-    // index — that's what its delete button reports, and roster.js#deleteSnap
-    // operates on store.snaps positions, not display positions.
-    refs.timeline.innerHTML = "";
-    state.snaps
-      .map((snap, index) => ({ snap, index }))
-      .reverse()
-      .forEach(({ snap, index }) => refs.timeline.appendChild(timelineRow(snap, formatLocal, index)));
   } else {
-    refs.timeline.innerHTML = "";
+    refs.changesList.innerHTML = "";
   }
 
   refs.snapConfirm.hidden = !state.snapConfirmText;
-  if (state.snapConfirmText) refs.snapConfirmText.textContent = state.snapConfirmText;
+  if (state.snapConfirmText)
+    refs.snapConfirmText.textContent = state.snapConfirmText;
 
   refs.deleteConfirm.hidden = !state.deleteSnapConfirmText;
-  if (state.deleteSnapConfirmText) refs.deleteConfirmText.textContent = state.deleteSnapConfirmText;
+  if (state.deleteSnapConfirmText)
+    refs.deleteConfirmText.textContent = state.deleteSnapConfirmText;
 
   refs.untrackConfirm.hidden = !state.untrackConfirming;
-}
-
-// --- Badges ------------------------------------------------------------
-// Marked with DIR_BADGE_ATTR, deliberately NOT DIR_ATTR — a sweep that
-// removes every DIR_ATTR node that isn't the bar would delete every badge
-// on each sync, since the bar has exactly one marked node and the grid can
-// have hundreds of badges.
-
-export function clearBadges() {
-  document.querySelectorAll(`[${DIR_BADGE_ATTR}]`).forEach((n) => n.remove());
-}
-
-/**
- * @param {Set<number>} ids userIds to badge, matched against currently
- *   rendered cards only — a departed person has no card to badge.
- */
-export function paintBadges(ids) {
-  if (!ids.size) return;
-  for (const card of findMemberCards()) {
-    const scraped = scrapeCard(card);
-    if (!scraped || !ids.has(scraped.userId)) continue;
-    const badge = document.createElement("span");
-    badge.setAttribute(DIR_BADGE_ATTR, "1");
-    badge.className = "cto-dir-badge";
-    badge.textContent = "NEW";
-    if (getComputedStyle(card).position === "static") card.classList.add("cto-dir-badge-anchor");
-    card.appendChild(badge);
-  }
 }
